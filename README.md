@@ -43,7 +43,7 @@ Any modern ssh-client should work.
 
 ### Automaticly enroll
 Open the `tunnelbuddy.ps1` i an text editor and fill your ScaleFT team name in the config.   
-See custom branding an for example.
+See custom branding for an example.
 
 ## Custom Branding 
 The name "TunnelBuddy" makes me happy, but might not fit your organization.  
