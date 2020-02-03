@@ -1,6 +1,6 @@
-# TunnelBuddy for Windows v0.2 - https://github.com/72656e65/TunnelBuddy 
+# TunnelBuddy for Windows v0.2 - Rene N. 
 # Howto: Right click & 'Run with powershell' or create a shortcut: powershell.exe "& 'C:\Users\Full path to\Documents\tunnelbuddy.ps1'"
-
+#
 # ScaleFT Config:
 $TeamName="" # Fill in to enable auto-enrollment, or manually sft enroll --team "your-team"
 $SSHClientExe=$ENV:UserProfile+"\AppData\Local\Programs\Git\usr\bin\ssh.exe" # Any modern ssh client like the one bundled with 'Git for Windows'
@@ -10,7 +10,6 @@ $IconPath=$PSScriptRoot+"\customBranding.ico" # Defaults to ScaleFT's icon
 # Internal config:
 $ScaleFTExe=$ENV:UserProfile+"\AppData\Local\Apps\ScaleFT\ScaleFT.exe"
 $ScaleFTStateJson=$ENV:UserProfile+"\AppData\Local\ScaleFT\state.json"
-$TunnelBuddyState=$ENV:UserProfile+"\state.tunnelbuddy"
 $TunnelBuddyServerList=$ENV:UserProfile+"\serverlist.tunnelbuddy"
 $exit="Exit"
 $connect="Connect"
@@ -23,23 +22,12 @@ $disconnected="disconnected"
 function Assert-FileExists {
     param($Path,[string] $ErrorMessage="Could not start")
     If (!(Test-Path -Path $Path)) {
-        Write-Host "`n$TunnelBuddy - $ErrorMessage `nExpected file: '$Path'."; Exit
+        Write-Host "`n$TunnelBuddy - $ErrorMessage `nExpected file: '$Path'."
+		Exit
     }
 }
 Assert-FileExists -Path $SSHClientExe -ErrorMessage "Verify path for ssh-client"
 Assert-FileExists -Path $ScaleFTExe -ErrorMessage "Verify that ScaleFT is installed correctly"
-if (Test-Path -Path $TunnelBuddyState) {
-    $lastRunStatus = Get-Content -Path $TunnelBuddyState -TotalCount 1 -ErrorAction SilentlyContinue
-    Set-Variable -Scope "Script" -Name "lastRunStatus" -Value $lastRunStatus
-}
-
-Add-Type -AssemblyName 'System.Windows.Forms'
-Add-Type -Name Window -Namespace Console -MemberDefinition '
-[DllImport("Kernel32.dll")] 
-public static extern IntPtr GetConsoleWindow();
-[DllImport("user32.dll")] 
-public static extern bool ShowWindow(IntPtr hWnd, Int32 nCmdShow);
-'
 
 function Find-Systray-Icon {
     if ((Test-Path -Path $IconPath)) {
@@ -159,6 +147,7 @@ function Update-ContextMenu-And-Items {
             $MenuItem = New-Object System.Windows.Forms.MenuItem
             if (($connectedServers.ContainsKey($displayName)) -or ($connectedServers.ContainsValue($ipAddress))) { 
                 $MenuItem.Text = "$displayName - $connected" 
+                #$MenuItem.Checked = $true
             } else {
                 $MenuItem.Text = "$displayName - $disconnected"
             }
@@ -200,7 +189,7 @@ function Connect-SshTunnel {
 
 function Connect-To-AllSSh {
     param ([bool]$KillRunning=$true)
-    # todo: check token valid if not run sft + timer to check for new token & try to reconnect 
+    # todo: check if token is valid, then if not run sft + timer to check for new token & try to reconnect 
     Start-Process -WindowStyle hidden -FilePath "sft" -ArgumentList "login" -PassThru # cheap solution
     if ($KillRunning) {
         Disconnect-Any-SshTunnels
@@ -252,13 +241,24 @@ function Update-TitleText {
     $Form.Text=$Title
 }
 
-# Run and have fun
-([Console.Window]::ShowWindow([Console.Window]::GetConsoleWindow(), 0)) > $null #Hide console
+## Run and have fun
+# Have sft validate its token
 Start-Process -WindowStyle hidden -FilePath "sft" -ArgumentList "login"
+# Load assembly
+Add-Type -AssemblyName 'System.Windows.Forms'
+Add-Type -Name Window -Namespace Console -MemberDefinition '
+[DllImport("Kernel32.dll")] 
+public static extern IntPtr GetConsoleWindow();
+[DllImport("user32.dll")] 
+public static extern bool ShowWindow(IntPtr hWnd, Int32 nCmdShow);
+'
+([Console.Window]::ShowWindow([Console.Window]::GetConsoleWindow(), 0)) > $null #Hide console
+# Initialize variables
 Set-Variable -Scope "Script" -Name "currentlyKnownStatus" -Value $disconnected
+Set-Variable -Scope "Script" -Name "connectedServers" -Value @{}
 Set-Variable -Scope "Script" -Name "isEnrolled" -Value $false
 Set-Variable -Scope "Script" -Name "serverList" -Value @{}
-Set-Variable -Scope "Script" -Name "connectedServers" -Value @{}
+# Initialize Windows Forms objects
 Set-Variable -Scope "Script" -Name "Form" -Value (New-Object System.Windows.Forms.Form)
 Set-Variable -Scope "Script" -Name "Timer" -Value (New-Object System.Windows.Forms.Timer)
 Set-Variable -Scope "Script" -Name "NotifyIcon" -Value (New-Object System.Windows.Forms.NotifyIcon)
@@ -270,22 +270,22 @@ $NotifyIcon.Icon = Find-Systray-Icon
 $NotifyIcon.Visible = $true
 
 Update-ContextMenu-And-Items
-Update-TitleText -Title "$TunnelBuddy ~ Loading"
 Update-CurrentlyKnown-ScaleFTState
 Update-CurrentlyKnown-ConnectionStatus
 Update-Known-ScaleFTServers -refreshFromScaleFT (!(Test-Path -Path $TunnelBuddyServerList))
+Update-TitleText -Title "$TunnelBuddy"
 
-if ($currentlyKnownStatus -eq $disconnected) { # Automatically connect if we're not already connected
+if ($currentlyKnownStatus -eq $disconnected) { # Automatically reconnect to previous session (after reboot etc)
     Connect-To-AllSSh
 }
 
+$Timer.Interval=5000
 $Timer.add_Tick({
     $wasKnownStatus = $currentlyKnownStatus
     Update-CurrentlyKnown-ConnectionStatus
     if ($currentlyKnownStatus -ne $wasKnownStatus) {
         Update-TitleText -Title "$TunnelBuddy - $currentlyKnownStatus"
         Update-ContextMenu-And-Items
-        $currentlyKnownStatus | Out-File -FilePath $TunnelBuddyState -NoNewline
     }
     $wasEnrolledStatus = $isEnrolled
     if (!$isEnrolled) {
@@ -295,6 +295,5 @@ $Timer.add_Tick({
         Update-ContextMenu-And-Items
     }
 })
-$Timer.Interval=5000
 $Timer.Start()
 $Form.ShowDialog() > $null
