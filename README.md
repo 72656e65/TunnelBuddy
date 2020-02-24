@@ -51,7 +51,7 @@ If your organization's name is "ABC" - you can easily rebrand the application to
 Change the icon to something your users are familiar to and pre-set the Team Name to enable auto-enrollment.  
 Edit the script in your favourite editor.
 Example:
-```
+```powershell
 # ScaleFT Config:
 $TeamName="abc-team" # Fill in to enable auto-enrollment, or manually sft enroll --team "your-team"
 $SSHClientExe=$ENV:UserProfile+"\AppData\Local\Programs\Git\usr\bin\ssh.exe" # Any modern ssh client like the one bundled with 'Git for Windows'
