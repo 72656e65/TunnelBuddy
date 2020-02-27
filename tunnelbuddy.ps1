@@ -1,47 +1,33 @@
-# TunnelHelper for Windows v0.3 - Rene N
-# Howto: Right click & 'Run with powershell' or create a shortcut: powershell.exe "& 'C:\Users\Full path to\Documents\tunnelhelper.ps1'"
+# TunnelBuddy for Windows v0.4 - Rene N. 
+# Howto: Right click & 'Run with powershell' or create a shortcut: powershell.exe "& 'C:\Users\Full path to\Documents\tunnelbuddy.ps1'"
+#
 # ScaleFT Config:
-$TeamName=""
-$SSHConfig=$ENV:UserProfile+"\.ssh\config2"
-$defaultHost="devWeb02" # Default to this if config does not include any hosts
+$TeamName="" # Fill in to enable auto-enrollment, or manually sft enroll --team "your-team"
 $SSHClientExe=$ENV:UserProfile+"\AppData\Local\Programs\Git\usr\bin\ssh.exe" # Any modern ssh client like the one bundled with 'Git for Windows'
-$ScaleFTExe=$ENV:UserProfile+"\AppData\Local\Apps\ScaleFT\ScaleFT.exe"
-$ScaleFTStateJson=$ENV:UserProfile+"\AppData\Local\ScaleFT\state.json"
 # Custom branding:
-$TunnelHelper="TunnelBuddy"
+$TunnelBuddy="TunnelBuddy"
 $IconPath=$PSScriptRoot+"\customBranding.ico" # Defaults to ScaleFT's icon
 # Internal config:
-$TunnelHelperState=$ENV:UserProfile+"\tunnelHelper.state"
+$ScaleFTExe=$ENV:UserProfile+"\AppData\Local\Apps\ScaleFT\ScaleFT.exe"
+$ScaleFTStateJson=$ENV:UserProfile+"\AppData\Local\ScaleFT\state.json"
+$TunnelBuddyServerList=$ENV:UserProfile+"\serverlist.tunnelbuddy"
 $exit="Exit"
 $connect="Connect"
+$connected="connected"
 $reconnect="Reconnect"
 $disconnect="Disconnect"
-$disconnected="Disconnected"
-$disconnectAll="Disconnect All"
+$disconnected="disconnected"
 
 # Verify config & dependent files
 function Assert-FileExists {
     param($Path,[string] $ErrorMessage="Could not start")
     If (!(Test-Path -Path $Path)) {
-        Write-Host "`n$TunnelHelper - $ErrorMessage `nExpected file: '$Path'."
-        Exit
+        Write-Host "`n$TunnelBuddy - $ErrorMessage `nExpected file: '$Path'."
+		Exit
     }
 }
-Assert-FileExists -Path $SSHClientExe -ErrorMessage "Verify that path for ssh-client"
-Assert-FileExists -Path $SSHConfig -ErrorMessage "SSH config missing"
+Assert-FileExists -Path $SSHClientExe -ErrorMessage "Verify path for ssh-client"
 Assert-FileExists -Path $ScaleFTExe -ErrorMessage "Verify that ScaleFT is installed correctly"
-if (Test-Path -Path $TunnelHelperState) {
-    $lastRunStatus = Get-Content -Path $TunnelHelperState -TotalCount 1 -ErrorAction SilentlyContinue
-    Set-Variable -Scope "Script" -Name "lastRunStatus" -Value $lastRunStatus
-}
-
-Add-Type -AssemblyName 'System.Windows.Forms'
-Add-Type -Name Window -Namespace Console -MemberDefinition '
-[DllImport("Kernel32.dll")] 
-public static extern IntPtr GetConsoleWindow();
-[DllImport("user32.dll")] 
-public static extern bool ShowWindow(IntPtr hWnd, Int32 nCmdShow);
-'
 
 function Find-Systray-Icon {
     if ((Test-Path -Path $IconPath)) {
@@ -74,22 +60,49 @@ function New-MenuItem{
     $MenuItem
 }
 
+# Read enrollment details from ScaleFT state-json
 function Update-CurrentlyKnown-ScaleFTState {
     if (Test-Path -Path $ScaleFTStateJson) {
         $state=Get-Content $ScaleFTStateJson | ConvertFrom-Json | Select-Object -ExpandProperty teams
         $enrolledTeam=$state | Select-Object -ExpandProperty name
         $loggedInUser=$state | Select-Object -ExpandProperty user
-        $isEnrolled=($enrolledTeam -eq $TeamName)
-		Set-Variable -Scope "Script" -Name "enrolledTeam" -Value $enrolledTeam
         Set-Variable -Scope "Script" -Name "loggedInUser" -Value $loggedInUser
-		Set-Variable -Scope "Script" -Name "isEnrolled" -Value $isEnrolled
+        Set-Variable -Scope "Script" -Name "enrolledTeam" -Value $enrolledTeam
+        if ($TeamName -ne "") {
+            $isEnrolled=($enrolledTeam -eq $TeamName)
+            Set-Variable -Scope "Script" -Name "isEnrolled" -Value $isEnrolled
+        } else {
+            Set-Variable -Scope "Script" -Name "isEnrolled" -Value $true
+        }
     }
+}
+
+# Retrieve available serveres from ScaleFT
+function Update-Known-ScaleFTServers {
+    param([bool] $refreshFromScaleFT=$false)
+    if ($refreshFromScaleFT) { # Hopefully we only need to do this once
+        Clear-Content -Path $TunnelBuddyServerList -ErrorAction SilentlyContinue
+        Update-TitleText -Title "$TunnelBuddy - Retrieving servers"
+        &powershell.exe sft list-servers 1> $TunnelBuddyServerList 
+    }
+
+    if (Test-Path -Path $TunnelBuddyServerList) {  
+        Get-Content -Path $TunnelBuddyServerList -Raw | Select-String -Pattern '(\b[\w\-\.]+)\s+[\w\-]+\s+[\w\-]+\s+[\w\-]+\s*([0-9\.\+\:\-]+)' -AllMatches | Foreach-Object {$_.Matches} | Foreach-Object { 
+            $hostName = $_.Groups[1].Value
+            $ipAddress = $_.Groups[2].Value
+            if (($hostName -ne "HOSTNAME") -and ($hostName -ne "PROJECT_NAME")) {
+                $serverList.Add($hostName, $ipAddress)
+            }
+        }
+        Update-ContextMenu-And-Items
+    } 
 }
 
 function Initialize-Enrollment {
     if (!$isEnrolled) { 
         Start-Process -FilePath "sft" -ArgumentList "enroll --team $TeamName" 
     } else {
+        Update-CurrentlyKnown-ScaleFTState
         Update-ContextMenu-And-Items
     }
 }
@@ -97,44 +110,57 @@ function Initialize-Enrollment {
 function Update-ContextMenu-And-Items {
     $ContextMenu = New-Object System.Windows.Forms.ContextMenu
     if (!$isEnrolled) {
-        $enrollMenu = New-MenuItem -Text "Enroll into $TeamName"
-        $enrollMenu.Add_Click({Initialize-Enrollment})
+        if ($TeamName -ne "") {
+            $enrollMenu = New-MenuItem -Text "Enroll into $TeamName"
+            $enrollMenu.Add_Click({Initialize-Enrollment})
+        } else {
+            $enrollMenu = New-Object System.Windows.Forms.MenuItem
+            $enrollMenu.Text = "Not enrolled"
+            $enrollMenu.Enabled = $false
+        }
         $ContextMenu.MenuItems.AddRange($enrollMenu)
         $ContextMenu.MenuItems.AddRange((New-MenuItem)) #divider
     } else {
         $userMenu = New-MenuItem -Text "$loggedInUser (Dashboard)"
-        $userMenu | Add-Member -Name Url -Value ("https://app.scaleft.com/t/"+$TeamName+"/user/servers") -MemberType NoteProperty
+        $userMenu | Add-Member -Name Url -Value ("https://app.scaleft.com/t/"+$enrolledTeam+"/user/servers") -MemberType NoteProperty
         $userMenu.Add_Click({Start-Process -FilePath $This.Url})
         
-        $disconnectMenu = New-MenuItem -Text "$disconnectAll" 
+        $connectMenu = New-MenuItem -Text "$reconnect" 
+        if ($currentlyKnownStatus -eq $disconnected) { $connectMenu.Text=$connect }
+        $connectMenu.Add_Click({Connect-To-AllSSh -KillRunning $true})
+        
+        $disconnectMenu = New-MenuItem -Text "$disconnect" 
         $disconnectMenu.Add_Click({Disconnect-Any-SshTunnels})
         if ($currentlyKnownStatus -eq $disconnected) { $disconnectMenu.Enabled=$false }
         
         $ContextMenu.MenuItems.AddRange($userMenu)
         $ContextMenu.MenuItems.AddRange((New-MenuItem)) #divider
 
-#Get-Content -Path "C:\Users\N151699\.ssh\config2" -Raw | Select-String -Pattern 'Hostname\s*(\b[\w\.+\:\-]+)' -AllMatches  | Foreach-Object {$_.Matches}  | Foreach-Object {$_.Groups[1].Value}
-# Get-Content -Path "C:\Users\N151699\.ssh\config2" -Raw | Select-String -Pattern 'Host\s+(\b[\w\-\.]+).*\n\s*Hostname\s*(\b[\w\.+\:\-]+)' -AllMatches  | Foreach-Object {$_.Matches} | Foreach-Object { $_.Groups[1].Value} #Groups[2].Value = Hostname
-#Select-String -Pattern 'Host\s+(\b[\w\-\.]+).*' 
-         Get-Content -Path $SSHConfig -Raw | Select-String -Pattern 'Host\s+(\b[\w\-\.]+).*\n\s*Hostname\s*(\b[\w\.+\:\-]+)' -AllMatches  | Foreach-Object {$_.Matches} | Foreach-Object { 
-            $displayName = $_.Groups[1].Value
-            $hostName = $_.Groups[2].Value
-            if ($hostName -ne "127.0.0.1") {
-                $text = "$connect $displayName"
-                if ($_.Groups[1].Value -eq $currentlyKnownStatus) { $text = "$reconnect $hostName" }
-                $ContextMenu.MenuItems.AddRange((New-MenuItem -Text "$text" -ConnectTo $hostName )) 
+        if ($serverList.Count -eq 0) { #uh-oh 
+            $MenuItem = New-Object System.Windows.Forms.MenuItem
+            $MenuItem.Text = "Refresh servers"
+            $MenuItem.Add_Click({Update-Known-ScaleFTServers -refreshFromScaleFT $true})
+            $ContextMenu.MenuItems.AddRange($MenuItem)
+        }
+        $serverList.GetEnumerator() | ForEach-Object {
+            $displayName = $_.Key; $ipAddress = $_.Value
+            $MenuItem = New-Object System.Windows.Forms.MenuItem
+            if (($connectedServers.ContainsKey($displayName)) -or ($connectedServers.ContainsValue($ipAddress))) { 
+                $MenuItem.Text = "$displayName - $connected" 
+                #$MenuItem.Checked = $true
+            } else {
+                $MenuItem.Text = "$displayName - $disconnected"
             }
+            $MenuItem.Enabled =$false
+            $ContextMenu.MenuItems.AddRange($MenuItem) 
         }
-        #if contextMenu.MenuItems .count <= 2 ==> add $defaultHost
-        if ($ContextMenu.MenuItems.Count -lt 3) {
-            $ContextMenu.MenuItems.AddRange((New-MenuItem -Text "$connect $defaultHost" -ConnectTo $defaultHost )) 
-        }
-		
-		# Connect All menu
+        
+        $ContextMenu.MenuItems.AddRange((New-MenuItem)) #divider
+        $ContextMenu.MenuItems.AddRange($connectMenu)
         $ContextMenu.MenuItems.AddRange($disconnectMenu)
     }
     $ContextMenu.MenuItems.AddRange((New-MenuItem -Text "$exit" -ExitOnly))
-    $ContextMenu
+    $NotifyIcon.ContextMenu = $ContextMenu
 }
 
 function Get-Running-Tunnels {
@@ -152,34 +178,53 @@ function Disconnect-Any-SshTunnels {
 }
 
 function Connect-SshTunnel {
-    param ([string] $ConnectTo, [bool]$KillRunning=$true)
+    param ([string] $ConnectTo, [bool]$KillRunning=$false)
     if ($KillRunning) {
         Disconnect-Any-SshTunnels -hostName $ConnectTo
     }
     $sshArgs="-N $ConnectTo"
-    Start-Process -WindowStyle hidden -FilePath "sft" -ArgumentList "login" -PassThru
+    Start-Process -WindowStyle hidden -FilePath "sft" -ArgumentList "login" -PassThru # cheap solution
     Start-Process -WindowStyle hidden -FilePath $SSHClientExe -ArgumentList $sshArgs -PassThru
 }
 
 function Connect-To-AllSSh {
-    param ([string] $ConnectTo, [bool]$KillRunning=$true)
-    Start-Process -WindowStyle hidden -FilePath "sft" -ArgumentList "login" -PassThru
+    param ([bool]$KillRunning=$true)
+    # todo: check if token is valid, then if not run sft + timer to check for new token & try to reconnect 
+    Start-Process -WindowStyle hidden -FilePath "sft" -ArgumentList "login" -PassThru # cheap solution
     if ($KillRunning) {
         Disconnect-Any-SshTunnels
     }
-    $sshArgs="-fNq $ConnectTo"
-    Start-Process -WindowStyle hidden -FilePath $SSHClientExe -ArgumentList $sshArgs -PassThru
+
+    $serverList.GetEnumerator() | ForEach-Object {
+        $hostName = $_.Key # $ipAddress = $_.Value
+        $sshArgs="-N $hostname"
+        Start-Process -WindowStyle hidden -FilePath $SSHClientExe -ArgumentList $sshArgs -PassThru
+    }
 }
 
 function Get-Currently-ConnectedTo {
+    $connectedServers.Clear()
+
     try {
-        [array]$maybeTunnelDetails=(Get-Running-Tunnels | Select-Object -Expand CommandLine).split(' ') 
-        if ($maybeTunnelDetails.Count -gt 2) {
-            Return $maybeTunnelDetails[2] # returns Hostname
+        Get-Running-Tunnels | Select-Object -Expand CommandLine | ForEach-Object {
+            try {
+                $maybeHost= $_.split(' ')
+                if ($maybeHost.Count -gt 2) {
+                    $hostname = $maybeHost[2] # Hostname/ip
+                    if (($serverList.ContainsKey($hostname)) -or ($serverList.ContainsValue($hostname))) {
+                        $connectedServers.Add($hostname, $connected)
+                    } 
+                }
+            } catch {} # Split failed - SilentlyContinue
+        }
+        if ($connectedServers.Count -ne 0) {
+            Return $connected
         }
     }
     catch {
-        Return $disconnected
+        if ($connectedServers.Count -ne 0) {
+            Return $connected
+        }
     }
     Return $disconnected
 }
@@ -189,48 +234,65 @@ function Update-CurrentlyKnown-ConnectionStatus {
     Set-Variable -Scope "Script" -Name "currentlyKnownStatus" -Value $now
 }
 
-# Run and have fun
-([Console.Window]::ShowWindow([Console.Window]::GetConsoleWindow(), 0)) > $null #Hide console
-Set-Variable -Scope "Script" -Name "currentlyKnownStatus" -Value $disconnected
-Set-Variable -Scope "Script" -Name "isEnrolled" -Value $false
-Update-CurrentlyKnown-ScaleFTState
-Update-CurrentlyKnown-ConnectionStatus
-
-$Form = New-Object System.Windows.Forms.Form
-$Form.Text=$TunnelHelper
-$Form.BackColor = "Black"
-$Form.ShowInTaskbar = $false
-$Form.FormBorderStyle = "None"
-$Form.TransparencyKey = "Black"
-$Form.WindowState = "Minimized"
-
-if ($currentlyKnownStatus -eq $disconnected) { # Automatically reconnect to previous session (after reboot etc)
-        Connect-SshTunnel -ConnectTo "-all" -KillRunning $false
+function Update-TitleText {
+    param ([string] $Title="$TunnelBuddy")
+    $host.ui.RawUI.WindowTitle=$Title
+    $NotifyIcon.Text=$Title
+    $Form.Text=$Title
 }
 
-$NotifyIcon = New-Object System.Windows.Forms.NotifyIcon
+## Run and have fun
+# Have sft validate its token
+Start-Process -WindowStyle hidden -FilePath "sft" -ArgumentList "login"
+# Load assembly
+Add-Type -AssemblyName 'System.Windows.Forms'
+Add-Type -Name Window -Namespace Console -MemberDefinition '
+[DllImport("Kernel32.dll")] 
+public static extern IntPtr GetConsoleWindow();
+[DllImport("user32.dll")] 
+public static extern bool ShowWindow(IntPtr hWnd, Int32 nCmdShow);
+'
+([Console.Window]::ShowWindow([Console.Window]::GetConsoleWindow(), 0)) > $null #Hide console
+# Initialize variables
+Set-Variable -Scope "Script" -Name "currentlyKnownStatus" -Value $disconnected
+Set-Variable -Scope "Script" -Name "connectedServers" -Value @{}
+Set-Variable -Scope "Script" -Name "isEnrolled" -Value $false
+Set-Variable -Scope "Script" -Name "serverList" -Value @{}
+# Initialize Windows Forms objects
+Set-Variable -Scope "Script" -Name "Form" -Value (New-Object System.Windows.Forms.Form)
+Set-Variable -Scope "Script" -Name "Timer" -Value (New-Object System.Windows.Forms.Timer)
+Set-Variable -Scope "Script" -Name "NotifyIcon" -Value (New-Object System.Windows.Forms.NotifyIcon)
+
+$Form.ShowInTaskbar = $false
+$Form.FormBorderStyle = "None"
+$Form.WindowState = "Minimized"
 $NotifyIcon.Icon = Find-Systray-Icon
-$NotifyIcon.Text = "$TunnelHelper - $currentlyKnownStatus"
-$NotifyIcon.ContextMenu = Update-ContextMenu-And-Items
 $NotifyIcon.Visible = $true
 
-$Timer=New-Object System.Windows.Forms.Timer
+Update-ContextMenu-And-Items
+Update-CurrentlyKnown-ScaleFTState
+Update-CurrentlyKnown-ConnectionStatus
+Update-Known-ScaleFTServers -refreshFromScaleFT (!(Test-Path -Path $TunnelBuddyServerList))
+Update-TitleText -Title "$TunnelBuddy"
+
+if ($currentlyKnownStatus -eq $disconnected) { # Automatically reconnect to previous session (after reboot etc)
+    Connect-To-AllSSh
+}
+
 $Timer.Interval=5000
 $Timer.add_Tick({
     $wasKnownStatus = $currentlyKnownStatus
     Update-CurrentlyKnown-ConnectionStatus
     if ($currentlyKnownStatus -ne $wasKnownStatus) {
-        $NotifyIcon.Text = "$TunnelHelper - $currentlyKnownStatus"
-        $NotifyIcon.ContextMenu = Update-ContextMenu-And-Items
-        $currentlyKnownStatus | Out-File -FilePath $TunnelHelperState -NoNewline
+        Update-TitleText -Title "$TunnelBuddy - $currentlyKnownStatus"
+        Update-ContextMenu-And-Items
     }
-#did disconnect on purpose otherwise: reconnect
     $wasEnrolledStatus = $isEnrolled
     if (!$isEnrolled) {
         Update-CurrentlyKnown-ScaleFTState
     }
     if ($wasEnrolledStatus -ne $isEnrolled) {
-        $NotifyIcon.ContextMenu = Update-ContextMenu-And-Items
+        Update-ContextMenu-And-Items
     }
 })
 $Timer.Start()
