@@ -8,7 +8,7 @@ Easy Windows GUI for ScaleFT tunnel - all in one Powershell script
 - Spend more time working and less time typing commands 
 
 All contained in one single Powershell script.  
-There is **no need** to run as Administrator nor tamper with any ExecutionPolicy.  
+There is **no need** to run as Administrator, but depending on company-wide settings you might need to configure [ExecutionPolicy](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.security/set-executionpolicy).
 
 ![Picture of context menu when servers are connected](https://poweredbyrene.eu/wp-content/uploads/2020/02/connected.jpg)
 ![Picture of context menu when servers are disconnected](https://poweredbyrene.eu/wp-content/uploads/2020/02/disconnected.jpg)
